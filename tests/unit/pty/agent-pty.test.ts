@@ -60,3 +60,37 @@ describe('AgentPTY --dangerously-skip-permissions toggle', () => {
     }
   });
 });
+
+describe('AgentPTY IS_SANDBOX env for unattended bypass-mode agents', () => {
+  // Capture the env object handed to node-pty's spawn() by driving the real
+  // spawn() path with a stub PTY return value.
+  async function envFor(config: any): Promise<Record<string, string>> {
+    const stubPty = {
+      onData: vi.fn(),
+      onExit: vi.fn(),
+      write: vi.fn(),
+      kill: vi.fn(),
+      resize: vi.fn(),
+      pid: 1234,
+    };
+    const spawnSpy = vi.fn().mockReturnValue(stubPty);
+    const pty = new AgentPTY(mockEnv, config);
+    // Inject the spawn fn so spawn() skips its lazy require('node-pty') and uses
+    // our spy — lets us inspect the env handed to node-pty.
+    (pty as unknown as { spawnFn: typeof spawnSpy }).spawnFn = spawnSpy;
+    await pty.spawn('fresh', 'PROMPT');
+    return spawnSpy.mock.calls.at(-1)![2].env as Record<string, string>;
+  }
+
+  it('sets IS_SANDBOX=1 by default (agents run unattended in bypass mode)', async () => {
+    expect((await envFor({})).IS_SANDBOX).toBe('1');
+  });
+
+  it('sets IS_SANDBOX=1 when dangerously_skip_permissions is explicitly true', async () => {
+    expect((await envFor({ dangerously_skip_permissions: true })).IS_SANDBOX).toBe('1');
+  });
+
+  it('does NOT set IS_SANDBOX when the permission gate is engaged (skip=false)', async () => {
+    expect((await envFor({ dangerously_skip_permissions: false })).IS_SANDBOX).toBeUndefined();
+  });
+});

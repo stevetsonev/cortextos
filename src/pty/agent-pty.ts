@@ -110,6 +110,24 @@ export class AgentPTY {
       }
     }
 
+    // cortextOS agents run unattended in bypassPermissions mode BY DESIGN — the
+    // hook-permission-telegram approval flow is the real gate (see
+    // src/hooks/index.ts). Advertise that unattended/sandboxed context to Claude
+    // Code via IS_SANDBOX=1; this is the documented signal for the container/VM
+    // deploys cortextOS targets and keeps bypass-mode behaviour explicit.
+    //
+    // NOTE: this does NOT, on its own, suppress Claude Code's one-time
+    // interactive "Bypass Permissions mode" acceptance dialog (verified against
+    // CLI 2.1.165 — the dialog still renders with IS_SANDBOX=1 set). That dialog
+    // is gated on per-project Claude Code state under the resolved project root
+    // (the git root — all agents share it because their cwds are subdirs of the
+    // framework repo), which onboarding establishes once. Set only when the
+    // skip-permissions flag is actually in play (matches buildClaudeArgs), and
+    // never override an explicit value already supplied by the org/agent env.
+    if (this.config.dangerously_skip_permissions !== false && ptyEnv['IS_SANDBOX'] === undefined) {
+      ptyEnv['IS_SANDBOX'] = '1';
+    }
+
     // Add convenience CTX_* aliases used throughout agent templates.
     // CTX_TELEGRAM_CHAT_ID: alias for CHAT_ID from the agent's .env
     if (ptyEnv['CHAT_ID']) {
