@@ -15,7 +15,6 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execFileSync } from 'child_process';
 
 const ANTHROPIC_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CLAUDE_CREDS = path.join(os.homedir(), '.claude', '.credentials.json');
@@ -31,7 +30,7 @@ export interface QuotaSnapshot {
   five_hour_remaining_pct: number;
   seven_day_remaining_pct: number;
   fetched_at: string;
-  source: 'env' | 'credentials.json' | 'accounts.json' | 'keychain';
+  source: 'env' | 'credentials.json' | 'accounts.json';
 }
 
 export interface QuotaResponse extends QuotaSnapshot {
@@ -51,22 +50,6 @@ function getOAuthToken(): { token: string; source: QuotaSnapshot['source'] } | n
       const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
       const token = parsed.claudeAiOauth?.accessToken;
       if (token) return { token, source: 'credentials.json' };
-    } catch {
-      /* fall through */
-    }
-  }
-  // macOS stores Claude Code credentials in the Keychain rather than
-  // ~/.claude/.credentials.json — same JSON blob, different store.
-  if (process.platform === 'darwin') {
-    try {
-      const raw = execFileSync(
-        'security',
-        ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
-        { encoding: 'utf-8', timeout: 5000 },
-      );
-      const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
-      const token = parsed.claudeAiOauth?.accessToken;
-      if (token) return { token, source: 'keychain' };
     } catch {
       /* fall through */
     }

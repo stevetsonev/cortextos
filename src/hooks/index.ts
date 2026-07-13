@@ -4,7 +4,7 @@
  */
 
 import { readFileSync, existsSync, watch, statSync, unlinkSync, mkdirSync, realpathSync, lstatSync } from 'fs';
-import { join, resolve, relative, sep, dirname, basename } from 'path';
+import { join, resolve, sep, dirname, basename } from 'path';
 import { homedir } from 'os';
 import * as crypto from 'crypto';
 
@@ -252,20 +252,9 @@ export function isClaudeDirOperation(
   // Canonicalize the agent dir first (resolves legitimate symlinks on the install
   // path, e.g. /tmp -> /private/tmp), so the .claude subtree below it is the only
   // thing left to vet.
-  const resolvedBase = resolve(base);
-  const canonAgentDir = canonicalizePath(resolvedBase);
+  const canonAgentDir = canonicalizePath(resolve(base));
   const claudeRoot = join(canonAgentDir, '.claude');
-
-  // Resolve filePath against the ORIGINAL (pre-canonical) agent dir, then re-root
-  // the result onto the canonical agent dir. An absolute file_path that travels
-  // through a symlinked ancestor on the install path (e.g. /var -> /private/var
-  // on macOS) would otherwise stay in the un-canonical form while claudeRoot is
-  // canonical, breaking the containment check below and wrongly rejecting a
-  // legitimate write inside the agent's own .claude. We do NOT canonicalize the
-  // .claude subtree itself — symlinks at or below .claude are vetted lexically by
-  // hasSymlinkComponent.
-  const relToBase = relative(resolvedBase, resolve(resolvedBase, filePath));
-  const target = resolve(canonAgentDir, relToBase);
+  const target = resolve(canonAgentDir, filePath);
 
   // Lexical containment within the agent's own .claude/.
   if (target !== claudeRoot && !target.startsWith(claudeRoot + sep)) return false;
