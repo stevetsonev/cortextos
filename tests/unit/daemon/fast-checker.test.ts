@@ -13,6 +13,7 @@ function createMockAgent(name = 'test-agent') {
     name,
     isBootstrapped: vi.fn().mockReturnValue(true),
     injectMessage: vi.fn().mockReturnValue(true),
+    injectMessageDetailed: vi.fn().mockReturnValue({ ok: true }),
     write: vi.fn(),
   } as any;
 }
@@ -316,6 +317,76 @@ describe('FastChecker', () => {
       const sendTyping = (checker as any).sendTyping.bind(checker);
       // Should not throw
       await expect(sendTyping(api, '12345')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('pollCycle Telegram message delivery', () => {
+    it('re-queues Telegram messages when the agent is NOT_RUNNING (no silent drop)', async () => {
+      const agent = createMockAgent();
+      // Agent is mid-restart / context-handoff: inject fails NOT_RUNNING.
+      agent.injectMessageDetailed.mockReturnValue({
+        ok: false,
+        code: 'NOT_RUNNING',
+        message: 'agent "test-agent" is registered but not running (status: restarting)',
+      });
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      (checker as any).telegramMessages.push({ formatted: 'hello from steve\n', ackIds: [] });
+
+      await (checker as any).pollCycle();
+
+      // The message must survive for redelivery once the agent is live again.
+      expect((checker as any).telegramMessages).toHaveLength(1);
+      expect((checker as any).telegramMessages[0].formatted).toBe('hello from steve\n');
+    });
+
+    it('preserves order when re-queuing multiple deferred messages', async () => {
+      const agent = createMockAgent();
+      agent.injectMessageDetailed.mockReturnValue({
+        ok: false,
+        code: 'NOT_RUNNING',
+        message: 'not running',
+      });
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      (checker as any).telegramMessages.push({ formatted: 'first\n', ackIds: [] });
+      (checker as any).telegramMessages.push({ formatted: 'second\n', ackIds: [] });
+
+      await (checker as any).pollCycle();
+
+      expect((checker as any).telegramMessages.map((m: any) => m.formatted)).toEqual([
+        'first\n',
+        'second\n',
+      ]);
+    });
+
+    it('drops DEDUPED messages (re-queue would loop forever)', async () => {
+      const agent = createMockAgent();
+      agent.injectMessageDetailed.mockReturnValue({
+        ok: false,
+        code: 'DEDUPED',
+        message: 'deduped',
+      });
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      (checker as any).telegramMessages.push({ formatted: 'dup\n', ackIds: [] });
+
+      await (checker as any).pollCycle();
+
+      expect((checker as any).telegramMessages).toHaveLength(0);
+    });
+
+    it('clears the queue on successful injection', async () => {
+      const agent = createMockAgent();
+      agent.injectMessageDetailed.mockReturnValue({ ok: true });
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      (checker as any).telegramMessages.push({ formatted: 'delivered\n', ackIds: [] });
+
+      await (checker as any).pollCycle();
+
+      expect((checker as any).telegramMessages).toHaveLength(0);
+      expect(agent.injectMessageDetailed).toHaveBeenCalledOnce();
     });
   });
 

@@ -187,13 +187,16 @@ export class FastChecker {
     let messageBlock = '';
     const ackIds: string[] = [];
 
-    // Process queued Telegram messages
-    let hasTelegramMessage = false;
-    while (this.telegramMessages.length > 0) {
-      const msg = this.telegramMessages.shift()!;
+    // Drain queued Telegram messages into a local buffer. We keep the original
+    // items (not just their concatenated text) so a failed inject can re-queue
+    // them instead of silently dropping the user's message. There is no `await`
+    // between this splice and the re-queue below, so no concurrently-queued
+    // message can interleave.
+    const takenTelegram = this.telegramMessages.splice(0);
+    for (const msg of takenTelegram) {
       messageBlock += msg.formatted;
-      hasTelegramMessage = true;
     }
+    const hasTelegramMessage = takenTelegram.length > 0;
 
     // Check agent inbox
     const inboxMessages = checkInbox(this.paths);
@@ -204,8 +207,8 @@ export class FastChecker {
 
     // Inject if there's anything
     if (messageBlock) {
-      const injected = this.agent.injectMessage(messageBlock);
-      if (injected) {
+      const result = this.agent.injectMessageDetailed(messageBlock);
+      if (result.ok) {
         // ACK inbox messages
         for (const id of ackIds) {
           ackInbox(this.paths, id);
@@ -219,6 +222,20 @@ export class FastChecker {
         }
         // Cooldown after injection
         await sleep(5000);
+      } else if (result.code === 'NOT_RUNNING') {
+        // The agent is mid-restart / context-handoff / bootstrap. Re-queue the
+        // Telegram messages at the FRONT (order-preserving) so they deliver once
+        // the agent is live again, instead of vanishing with no response. Inbox
+        // messages self-heal: they were never ack'd, so checkInbox re-surfaces
+        // them next cycle.
+        if (takenTelegram.length > 0) {
+          this.telegramMessages.unshift(...takenTelegram);
+          this.log(`Inject deferred (agent not running); re-queued ${takenTelegram.length} Telegram message(s)`);
+        }
+      } else {
+        // DEDUPED — genuinely duplicate content; re-queueing would loop forever.
+        // Drop it, but log so this formerly-silent path is now visible.
+        this.log(`Inject skipped (${result.code})`);
       }
     }
 
