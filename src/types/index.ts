@@ -142,6 +142,32 @@ export interface EcosystemFeatureConfig {
   enabled?: boolean;
 }
 
+/**
+ * Wedge detection config. Default OFF — the whole subsystem is inert unless
+ * `enabled: true`. Empirically validated against a live orchestrator wedge
+ * (see outputs/cortextos/wedge-detection-spec.md).
+ */
+export interface WedgeDetectionConfig {
+  /** Master switch. Absent/false = subsystem inert (no ticks, no probes). */
+  enabled?: boolean;
+  /** True for the org orchestrator — a confirmed orchestrator wedge escalates DIRECT to the human (its own escalate-to-orchestrator rung is unavailable). */
+  is_orchestrator?: boolean;
+  /** Passive pre-filter: min minutes of jsonl-quiet before an agent is a probe candidate. Default 15. */
+  t_quiet_min?: number;
+  /** Heartbeat is "stale" after this many minutes. Default 30. */
+  heartbeat_stale_min?: number;
+  /** After a probe (nudge), minutes to wait for the agent to consume it before confirming wedged. Default 15. */
+  probe_grace_min?: number;
+  /**
+   * Remediation ceiling for THIS agent. 'observe' = detect + log only;
+   * 'nudge' = also inject the probe/nudge; 'escalate' = also message the
+   * orchestrator/human on a confirmed wedge. Restart actions are intentionally
+   * NOT included in the prototype (a stopped agent can hit the bypass-dialog
+   * wall — see the spec); default 'escalate'.
+   */
+  max_action?: 'observe' | 'nudge' | 'escalate';
+}
+
 export interface EcosystemConfig {
   /** Daily git snapshots of agent workspace. Agent stages safe files, reviews diff, commits. */
   local_version_control?: EcosystemFeatureConfig;
@@ -184,6 +210,12 @@ export interface AgentConfig {
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  /**
+   * Wedge detection (default OFF). Detects an agent that is alive but not
+   * progressing (stuck mid-turn / frozen PTY) vs healthy-busy/idle/dead, via a
+   * cheap passive pre-filter + an inject-probe discriminator. See WedgeDetectionConfig.
+   */
+  wedge_detection?: WedgeDetectionConfig;
   /** Context window % at which to warn agent + user. Default: 70. Absent = observe-only. */
   ctx_warning_threshold?: number;
   /** Context window % at which to inject handoff prompt and hard-restart. Default: 80. */

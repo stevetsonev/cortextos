@@ -4,6 +4,7 @@ import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, Telegram
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
+import { WedgeMonitor, type MonitoredAgent } from './wedge-monitor.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
@@ -34,6 +35,9 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+  /** Per-agent metadata the wedge monitor needs (config + dirs). */
+  private wedgeMeta: Map<string, { config: AgentConfig; agentDir: string; org: string }> = new Map();
+  private wedgeMonitor?: WedgeMonitor;
 
   // Set true at construction time if any agent in state/ has a stale
   // .daemon-crashed marker, meaning the previous daemon process died
@@ -53,6 +57,16 @@ export class AgentManager {
     if (this.daemonJustCrashed) {
       console.log('[agent-manager] Detected .daemon-crashed marker(s) — previous daemon exited abnormally. Will quiet BUG-011 alarm for this startup cycle.');
     }
+    // Wedge monitor — inert unless some agent has wedge_detection.enabled.
+    this.wedgeMonitor = new WedgeMonitor(
+      this.instanceId,
+      () => [...this.wedgeMeta.entries()].flatMap(([name, m]): MonitoredAgent[] => {
+        const entry = this.agents.get(name);
+        return entry ? [{ name, process: entry.process, config: m.config, agentDir: m.agentDir, org: m.org }] : [];
+      }),
+      (text) => console.error(`[wedge-monitor][HUMAN-ESCALATE] ${text}`), // TODO: wire to a human channel (per-agent telegram exists; global human channel does not yet)
+      (agent, event, meta) => console.log(`[wedge-monitor] ${event} ${agent} ${JSON.stringify(meta)}`),
+    );
   }
 
   /**
@@ -404,6 +418,10 @@ export class AgentManager {
     }
 
     this.agents.set(name, { process: agentProcess, checker });
+    // Register wedge-monitor metadata + (idempotently) start the monitor. It
+    // self-gates: no ticks unless some agent has wedge_detection.enabled.
+    this.wedgeMeta.set(name, { config: config ?? {}, agentDir, org: org ?? this.org });
+    this.wedgeMonitor?.start();
 
     // Start agent
     await agentProcess.start();
@@ -913,6 +931,7 @@ export class AgentManager {
    * time `pty.kill()` runs, every agent already has its marker on disk.
    */
   async stopAll(): Promise<void> {
+    this.wedgeMonitor?.stop();
     const names = [...this.agents.keys()];
 
     for (const name of names) {
