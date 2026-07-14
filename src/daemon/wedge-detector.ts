@@ -140,7 +140,7 @@ export function stepAgent(
   actions: WedgeActions,
   suppressRemediation: boolean,
 ): WedgeState {
-  const maxAction = cfg.max_action ?? 'escalate';
+  const maxAction = cfg.max_action ?? 'observe'; // safest default (Steve gate): detect+log only until promoted
   const cls = classify(s, t, now);
 
   // Any sign of life or a cleared queue resets an in-flight probe.

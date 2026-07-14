@@ -163,7 +163,7 @@ export interface WedgeDetectionConfig {
    * 'nudge' = also inject the probe/nudge; 'escalate' = also message the
    * orchestrator/human on a confirmed wedge. Restart actions are intentionally
    * NOT included in the prototype (a stopped agent can hit the bypass-dialog
-   * wall — see the spec); default 'escalate'.
+   * wall — see the spec); default 'observe' (Steve gate: soak in detect+log before promoting to escalate).
    */
   max_action?: 'observe' | 'nudge' | 'escalate';
 }

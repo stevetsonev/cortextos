@@ -64,7 +64,7 @@ export class AgentManager {
         const entry = this.agents.get(name);
         return entry ? [{ name, process: entry.process, config: m.config, agentDir: m.agentDir, org: m.org }] : [];
       }),
-      (text) => console.error(`[wedge-monitor][HUMAN-ESCALATE] ${text}`), // TODO: wire to a human channel (per-agent telegram exists; global human channel does not yet)
+      (text) => console.error(`[wedge-monitor][HUMAN-ESCALATE] ${text}`), // TODO(held-followup): send to Steve Telegram chat_id 8569199291 via a bot token (needs bot-token source decision — e.g. orchestrator bot); daemon has no global human channel yet
       (agent, event, meta) => console.log(`[wedge-monitor] ${event} ${agent} ${JSON.stringify(meta)}`),
     );
   }
