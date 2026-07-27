@@ -71,7 +71,7 @@ function heartbeatMs(stateDir: string): number | null {
  * (A fired-cron-with-no-handling signal is a documented future addition; it
  * needs cron-execution-log correlation and is easy to false-flag on no-op crons.)
  */
-function owesWork(taskDir: string, inboxDir: string, name: string, now: number): boolean {
+export function owesWork(taskDir: string, inboxDir: string, name: string, now: number): boolean {
   try {
     for (const f of readdirSync(taskDir)) {
       if (!f.endsWith('.json')) continue;
