@@ -76,7 +76,18 @@ function owesWork(taskDir: string, inboxDir: string, name: string, now: number):
     for (const f of readdirSync(taskDir)) {
       if (!f.endsWith('.json')) continue;
       const t = JSON.parse(readFileSync(join(taskDir, f), 'utf8'));
-      const assignee = t.assignee ?? t.agent;
+      // 🔴 `assigned_to` IS THE FIELD THE TASK STORE ACTUALLY USES — 346 of 346 records, with
+      // ZERO using `assignee` or `agent`. Without it this matched nothing, so the TASK half of
+      // `owesWork` was dead and `owesWork` collapsed to "is the inbox non-empty".
+      //
+      // ⚠️ THAT MATTERED MORE THAN A MISSING SIGNAL: `owesWork` is the false-positive guard
+      // (`wedge-detector.ts:97` — "the key false-positive guard"), so an agent WEDGED MID-TASK
+      // WITH A DRAINED INBOX classified as `healthy-idle` and was never nominated. A false
+      // NEGATIVE in exactly the scenario this detector exists for.
+      //
+      // Legacy names are read first so any record written under an older shape still resolves;
+      // `assigned_to` is the one that fires today.
+      const assignee = t.assignee ?? t.agent ?? t.assigned_to;
       if (assignee === name && t.status === 'in_progress') {
         const updated = Date.parse(t.updated_at ?? t.updatedAt ?? '');
         if (!Number.isFinite(updated) || now - updated > TWO_HOURS_MS) return true;
