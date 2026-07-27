@@ -44,10 +44,17 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 describe('owesWork — the field the task store actually writes', () => {
   /**
    * 🔴 THE REGRESSION ARM. This is the one that fails if `?? t.assigned_to` is ever removed.
-   * Measured 2026-07-27: `assigned_to` on 346 of 346 task records, `assignee` on ZERO.
-   * The CLI flag that creates a task is `--assignee`, which is what taught the wrong name.
+   *
+   * Measured by parsing the live task store: 100% of records carry `assigned_to`, 0% carry
+   * `assignee` or `agent`. The RATIO is the load-bearing claim and it is stated here instead
+   * of a count on purpose — the absolute ages as tasks are created (it read 346/346 and then
+   * 361/361 within one hour of 2026-07-27 06:00Z), and a precise number that no longer
+   * reconciles invites doubt about the true claim standing beside it.
+   *
+   * Root cause of the original defect: the CLI flag that CREATES a task is `--assignee`,
+   * so the write API teaches the wrong name for the read that matters.
    */
-  it('fires on assigned_to — the name 346/346 live records use', () => {
+  it('fires on assigned_to — the only owner field live records carry', () => {
     task('t1', { status: 'in_progress', assigned_to: 'jordan-blake', updated_at: iso(NOW - 3 * HOUR) });
     expect(owesWork(taskDir, inboxDir, 'jordan-blake', NOW)).toBe(true);
   });

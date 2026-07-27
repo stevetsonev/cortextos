@@ -76,9 +76,11 @@ export function owesWork(taskDir: string, inboxDir: string, name: string, now: n
     for (const f of readdirSync(taskDir)) {
       if (!f.endsWith('.json')) continue;
       const t = JSON.parse(readFileSync(join(taskDir, f), 'utf8'));
-      // 🔴 `assigned_to` IS THE FIELD THE TASK STORE ACTUALLY USES — 346 of 346 records, with
-      // ZERO using `assignee` or `agent`. Without it this matched nothing, so the TASK half of
-      // `owesWork` was dead and `owesWork` collapsed to "is the inbox non-empty".
+      // 🔴 `assigned_to` IS THE FIELD THE TASK STORE ACTUALLY USES — 100% of records carry it,
+      // ZERO carry `assignee` or `agent` (measured by parsing the live task store; the RATIO is
+      // the claim, since the absolute count grows with every task created). Without it this
+      // matched nothing, so the TASK half of `owesWork` was dead and `owesWork` collapsed to
+      // "is the inbox non-empty".
       //
       // ⚠️ THAT MATTERED MORE THAN A MISSING SIGNAL: `owesWork` is the false-positive guard
       // (`wedge-detector.ts:97` — "the key false-positive guard"), so an agent WEDGED MID-TASK
