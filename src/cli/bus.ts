@@ -376,7 +376,13 @@ busCommand
     const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
 
     console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
+    // ID column is 28 wide and NEVER truncates. Task ids are 27 chars; the previous
+    // substring(0, 26) cut the last character off EVERY id, and padEnd(26) was a no-op, so
+    // the assignee ran straight onto it and the truncation was invisible. Copying an id out
+    // of this listing then failed `update-task` with "not found in any org under …/orgs/",
+    // which reads as an org/root problem rather than a short id. A misaligned column is
+    // cosmetic; a truncated IDENTIFIER is a broken workflow with a misleading error.
+    const header = '  Status  Pri  ID                          Assignee         Title';
     const separator = '  ' + '-'.repeat(header.length - 2);
     console.log(header);
     console.log(separator);
@@ -384,7 +390,7 @@ busCommand
     for (const t of tasks) {
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
-      const id = t.id.substring(0, 26).padEnd(26);
+      const id = t.id.padEnd(28);
       const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
       const title = t.title.substring(0, 50);
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
@@ -1144,7 +1150,7 @@ busCommand
   .option('--agent <name>', 'Agent name (for private scope)')
   .option('--scope <s>', 'Scope: shared, private, or all', 'all')
   .option('--top-k <n>', 'Number of results', '5')
-  .option('--threshold <f>', 'Minimum similarity score (0-1)', '0.5')
+  .option('--threshold <f>', 'Minimum similarity score (0-1); omit to use the KB config value')
   .option('--json', 'Output raw JSON')
   .action((question: string, opts: { org?: string; agent?: string; scope?: string; topK?: string; threshold?: string; json?: boolean }) => {
     const env = resolveEnv();
@@ -1162,7 +1168,7 @@ busCommand
         agent: opts.agent || env.agentName,
         scope: (opts.scope as 'shared' | 'private' | 'all') || 'all',
         topK: parseInt(opts.topK || '5', 10),
-        threshold: parseFloat(opts.threshold || '0.5'),
+        threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
         frameworkRoot: env.frameworkRoot || process.cwd(),
         instanceId: env.instanceId,
       },
@@ -1174,7 +1180,11 @@ busCommand
     }
 
     if (result.results.length === 0) {
-      console.log(`No results found for: "${question}"`);
+      // Pass the tool's own message through when it has one. It distinguishes
+      // "empty collection" / "nothing above threshold" / "genuine zero matches",
+      // three states this wrapper used to collapse into one reassuring sentence.
+      const detail = (result as { message?: string }).message;
+      console.log(detail ? detail : `No results found for: "${question}"`);
       return;
     }
 
