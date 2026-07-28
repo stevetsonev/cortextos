@@ -463,7 +463,13 @@ busCommand
 
     updateHeartbeat(paths, env.agentName, status, {
       org: env.org,
-      timezone: opts.timezone,
+      // `opts.timezone` is the --timezone flag, which nobody passes; without the
+      // fallback updateHeartbeat computes day/night in UTC and the window is shifted
+      // by the org's offset (6h for America/Edmonton), so 08:00-16:00 of the user's
+      // working day is reported as 'night'. env.timezone is already fully resolved
+      // here — CTX_TIMEZONE, else the org's context.json — and env.org is read on the
+      // line above, so the value was in scope all along.
+      timezone: opts.timezone || env.timezone,
       loopInterval: opts.interval,
       currentTask: opts.task,
       displayName,
