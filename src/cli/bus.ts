@@ -391,8 +391,14 @@ busCommand
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
       const id = t.id.padEnd(28);
-      const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
-      const title = t.title.substring(0, 50);
+      // SIGNAL every cut. `r.content.substring(0, 200)` elsewhere in this file appends "..."
+      // and that is the right pattern: truncation is fine, SILENT truncation is not. A reader
+      // cannot otherwise tell a short title from a cut one — and titles here carry counts
+      // ("fix 20 pre-existing failures") that go stale, so a silently-cut stale count is the
+      // only thing a listing shows.
+      const cut = (v, n) => (v.length > n ? v.substring(0, n - 1) + '…' : v);
+      const assignee = cut(t.assigned_to || '-', 16).padEnd(17);
+      const title = cut(t.title, 50);
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
     }
     console.log('');
