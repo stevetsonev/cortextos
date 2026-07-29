@@ -18,7 +18,10 @@ function sig(over: Partial<AgentSignals> = {}): AgentSignals {
   return {
     name: 'a', alive: true, isOrchestrator: false,
     jsonlMtimeMs: NOW - 1 * MIN, heartbeatMs: NOW - 1 * MIN, uptimeMs: 3600_000,
-    owesWork: false, ...over,
+    // null = no readable tail ⇒ detectUsageLimit returns not-limited ⇒ the agent
+    // stays nominatable. Failing toward "restartable" is deliberate: an unreadable
+    // log must never become a standing excuse to skip remediation.
+    owesWork: false, stdoutTail: null, ...over,
   };
 }
 

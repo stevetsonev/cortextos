@@ -10,7 +10,10 @@
  * notify) — it never restarts an agent (a stopped agent can hit the bypass-dialog
  * wall; that recovery is a human step, carried in the escalation text).
  */
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'fs';
+import {
+  existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync,
+  openSync, readSync, closeSync,
+} from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig } from '../types/index.js';
@@ -54,6 +57,34 @@ function jsonlMtimeMs(agentDir: string): number | null {
 }
 
 /** last_heartbeat epoch ms from the agent's state dir, or null. */
+/**
+ * Tail of an agent's stdout log — the §5a DETECTION input.
+ *
+ * Reads the last 64 KiB rather than the whole file (stdout.log grows unbounded)
+ * and returns null on any failure. **null is UNKNOWN, not "no limit"** — the
+ * detector treats a missing tail as "not limited", which nominates the agent for
+ * probing rather than suppressing remediation. That is the correct direction to
+ * fail: an unreadable log must not become a standing excuse never to restart.
+ */
+function stdoutTail(logDir: string, maxBytes = 64 * 1024): string | null {
+  try {
+    const p = join(logDir, 'stdout.log');
+    const size = statSync(p).size;
+    const start = Math.max(0, size - maxBytes);
+    const fd = openSync(p, 'r');
+    try {
+      const len = size - start;
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, start);
+      return buf.toString('utf-8');
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
 function heartbeatMs(stateDir: string): number | null {
   try {
     const raw = JSON.parse(readFileSync(join(stateDir, 'heartbeat.json'), 'utf8'));
@@ -159,6 +190,7 @@ export class WedgeMonitor {
         heartbeatMs: heartbeatMs(p.stateDir),
         uptimeMs: 0, // reserved for the (out-of-prototype-scope) restart tier
         owesWork: owesWork(p.taskDir, p.inbox, a.name, now),
+        stdoutTail: stdoutTail(p.logDir),
       };
     });
 

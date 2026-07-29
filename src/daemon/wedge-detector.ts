@@ -42,6 +42,96 @@ export interface AgentSignals {
    * write) in the window. The false-positive guard for correctly-idle agents.
    */
   owesWork: boolean;
+  /**
+   * Tail of the agent's stdout log (~last 200 lines), or null if unreadable.
+   *
+   * 🔴 THE DISCRIMINATOR IS CONTENT, NOT MTIME. A quota-blocked session is
+   * indistinguishable from a wedged one on every signal above — alive, quiet
+   * jsonl, stale heartbeat, owes work. Only the text separates them.
+   * (Also the 2026-06-13 fable-5 lesson: a broken agent that wrote error text on
+   * every cron fire made mtime read as "active".)
+   */
+  stdoutTail: string | null;
+}
+
+/**
+ * §5a DETECTION — blocking-quota phrasing ONLY.
+ *
+ * Lifted verbatim from `src/hooks/hook-crash-alert.ts:69-73`, which is already in
+ * production use for crash alerting and is correctly NOT timezone-anchored.
+ * Reused rather than re-derived.
+ *
+ * ⚠️ DELIBERATELY EXCLUDED — `hook-crash-alert.ts:64-68` (`overloaded_error`,
+ * `rate_limit_error`, `rate limit`, `rate-limit`, `too many requests`). Those are
+ * TRANSIENT (seconds-to-minutes) and DO NOT ACCOUNT FOR A MULTI-HOUR SILENCE.
+ * Admitting them re-opens the false-positive by another door: a genuinely wedged
+ * agent whose tail happens to carry an hours-old transient rate-limit line would
+ * be excluded from restart forever. The exclusion must only admit states that
+ * actually explain the observed silence.
+ *
+ * ⚠️ DO NOT anchor on a timezone. `resets 4am (UTC)`, `resets 8am (UTC)` and
+ * `resets 2am (America/Edmonton)` are all real and observed on different agents —
+ * reset boundaries are NOT a fleet constant. (v1's defect: false negative, which
+ * restarts a limited agent into its own quota.)
+ *
+ * ⚠️ DO NOT admit a bare `resets` / `reset` term. It is prose, not a signature —
+ * it matches this very file's line "a cleared queue resets an in-flight probe".
+ * (v2's defect: false positive, which suppresses the restart of a real wedge
+ * forever, behind a plausible status nobody chases.)
+ */
+const USAGE_LIMIT_MARKERS = [
+  'usage limit',
+  'weekly limit',
+  '5-hour limit',
+  '5h limit',
+  'quota exceeded',
+] as const;
+
+/** Normalise a captured tail the same way hook-crash-alert.ts:62 does. */
+function normaliseTail(tail: string): string {
+  // eslint-disable-next-line no-control-regex
+  return tail.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').toLowerCase();
+}
+
+/** Result of the §5a/§5b split: detection first, extraction only after it fires. */
+export interface UsageLimitVerdict {
+  limited: boolean;
+  /**
+   * §5b — reset clause parsed from the MATCHED line, free-form, any timezone.
+   * `null` when absent or unparseable.
+   *
+   * 🔴 A PARSE FAILURE MUST NEVER FALL THROUGH TO THE RESTART PATH. `limited`
+   * stays true with `resetsAt: null`; that is an unknown ETA, not a non-limit.
+   * Letting it fall through would reintroduce the false-negative as an
+   * error-handling branch.
+   */
+  resetsAt: string | null;
+}
+
+/**
+ * §5a DETECTION, then §5b EXTRACTION — deliberately separate.
+ *
+ * 🔑 THE ROOT CAUSE OF BOTH PRIOR DEFECTS: the reset clause was used as a
+ * DETECTION term. It is not one — it is an EXTRACTION target. Detection asks
+ * "is this agent quota-blocked"; the reset clause answers "until when", and only
+ * matters once detection has already succeeded. Fusing them forces a choice
+ * between anchoring the clause (too narrow) and wildcarding it (too broad).
+ * ⇒ RULE: never put a field you want to EXTRACT into the predicate that decides
+ * WHETHER to extract.
+ */
+export function detectUsageLimit(tail: string | null): UsageLimitVerdict {
+  if (!tail) return { limited: false, resetsAt: null };
+  const text = normaliseTail(tail);
+
+  const hit = USAGE_LIMIT_MARKERS.find((m) => text.includes(m));
+  if (!hit) return { limited: false, resetsAt: null };
+
+  // §5b — only now. Search the MATCHED line, not the whole tail, so an unrelated
+  // "resets" elsewhere in the buffer cannot supply a bogus ETA.
+  const line = text.split('\n').find((l) => l.includes(hit)) ?? '';
+  const m = /\bresets?\b\s+(.+?)\s*$/.exec(line);
+  const resetsAt = m?.[1]?.trim() || null;
+  return { limited: true, resetsAt: resetsAt && resetsAt.length > 0 ? resetsAt : null };
 }
 
 export type WedgePhase = 'clear' | 'probed' | 'confirmed';
@@ -63,7 +153,12 @@ export function initialWedgeState(): WedgeState {
   return { phase: 'clear', nudgeCount: 0 };
 }
 
-export type Classification = 'dead' | 'healthy-busy' | 'healthy-idle' | 'wedge-candidate';
+export type Classification =
+  | 'dead'
+  | 'healthy-busy'
+  | 'healthy-idle'
+  | 'usage-limited'
+  | 'wedge-candidate';
 
 export interface Thresholds {
   tQuietMs: number;
@@ -97,7 +192,16 @@ export function classify(s: AgentSignals, t: Thresholds, now: number): Classific
   if (!s.owesWork) return 'healthy-idle';
   // Quiet + owes work + heartbeat stale → candidate to PROBE (not yet wedged).
   const hbStale = s.heartbeatMs === null || now - s.heartbeatMs >= t.heartbeatStaleMs;
-  return hbStale ? 'wedge-candidate' : 'healthy-idle';
+  if (!hbStale) return 'healthy-idle';
+
+  // §5a — INTERCEPT BEFORE NOMINATING. A quota-blocked session reaches this exact
+  // point wearing every wedge signal; only the stdout CONTENT separates them, and
+  // a restart cannot clear a quota (it restarts INTO the limit, re-blocks, and
+  // loops to the cap). Checked here rather than at the action tier so the
+  // classification itself is honest — the dashboard should not call it a wedge.
+  if (detectUsageLimit(s.stdoutTail).limited) return 'usage-limited';
+
+  return 'wedge-candidate';
 }
 
 /**
@@ -142,6 +246,39 @@ export function stepAgent(
 ): WedgeState {
   const maxAction = cfg.max_action ?? 'observe'; // safest default (Steve gate): detect+log only until promoted
   const cls = classify(s, t, now);
+
+  // §5c — USAGE-LIMITED: surface + alert a human, NEVER restart, NEVER probe.
+  // A probe is pointless (the session cannot consume it while blocked) and a
+  // restart is actively harmful. Any in-flight probe state is dropped so the
+  // agent cannot age into 'confirmed' while it is merely waiting out a quota.
+  //
+  // 🔴 THIS BRANCH MUST PRECEDE EVERY REMEDIATION PATH BELOW, including the
+  // host-suspend guard: suppressRemediation only skips a tick, whereas this is a
+  // standing "do not restart" for as long as the quota holds.
+  if (cls === 'usage-limited') {
+    const { resetsAt } = detectUsageLimit(s.stdoutTail);
+    actions.log('wedge_usage_limited', {
+      agent: s.name,
+      // §5b parse failure is reported as an unknown ETA — it never downgrades the
+      // classification, because that would restore the restart-into-quota path.
+      resetsAt: resetsAt ?? 'unknown',
+      from: prev.phase,
+    });
+    if (prev.phase !== 'clear') {
+      actions.log('wedge_cleared', { agent: s.name, from: prev.phase, classification: cls });
+    }
+    if (maxAction === 'escalate') {
+      actions.escalate(
+        s.name,
+        s.isOrchestrator,
+        `${s.name} is USAGE-LIMITED (quota-blocked), not wedged: ` +
+          `usage-limited until ${resetsAt ?? 'unknown'}. NO restart performed — a restart ` +
+          `cannot clear a quota and would loop into the cap. No action needed unless this ` +
+          `outlasts the stated reset.`,
+      );
+    }
+    return { phase: 'clear', nudgeCount: 0, lastClearedAt: now };
+  }
 
   // Any sign of life or a cleared queue resets an in-flight probe.
   if (cls === 'healthy-busy' || cls === 'healthy-idle' || cls === 'dead') {
