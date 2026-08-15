@@ -18,6 +18,8 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, unlinkSync, mk
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFile } from 'child_process';
+import { isTelegramHeld } from '../telegram/hold.js';
+import { logOutboundMessage } from '../telegram/logging.js';
 
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
@@ -260,6 +262,50 @@ export function classifyFromMarkers(
   return { endType: 'crash', reason: '' };
 }
 
+/**
+ * Send a crash/lifecycle alert to Telegram, gated on the per-agent hold.
+ *
+ * Exported for testing. This hook sends via a RAW fetch — it does NOT go
+ * through TelegramAPI.sendMessage — so the TelegramAPI-layer hold gate does
+ * not cover it and the check is applied here. A crash/lifecycle alert is a
+ * daemon-auto INITIATED send (never a reply), so it is subject to the hold.
+ * Leaving this one path ungated is exactly the "looks complete but leaks" gap.
+ * Every attempt is logged — `suppressed` while held, a typed send otherwise —
+ * so a zero in the outbound log is not confused with "this path does not log".
+ */
+export async function sendTelegramAlert(
+  ctxRoot: string,
+  agentName: string,
+  botToken: string,
+  chatId: string,
+  message: string,
+): Promise<void> {
+  if (!message) return;
+
+  if (isTelegramHeld(ctxRoot, agentName)) {
+    try {
+      logOutboundMessage(ctxRoot, agentName, chatId, message, 0, {
+        suppressed: true,
+        suppressReason: 'telegram-hold',
+      });
+    } catch { /* logging must never break the hook */ }
+    return;
+  }
+
+  try {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message }),
+    });
+    try {
+      const data: any = await resp.json().catch(() => ({}));
+      logOutboundMessage(ctxRoot, agentName, chatId, message, data?.result?.message_id ?? 0);
+    } catch { /* observability only — never break the hook on a logging failure */ }
+  } catch { /* ignore send failures */ }
+}
+
 async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME;
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
@@ -435,14 +481,7 @@ async function main(): Promise<void> {
   }
 
   if (message) {
-    try {
-      const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: message }),
-      });
-    } catch { /* ignore send failures */ }
+    await sendTelegramAlert(ctxRoot, agentName, botToken, chatId, message);
   }
 }
 

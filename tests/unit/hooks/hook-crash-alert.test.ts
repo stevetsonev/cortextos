@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -8,7 +8,7 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { readMaxCrashesPerDay, notifyAgents, classifyFromMarkers } from '../../../src/hooks/hook-crash-alert';
+import { readMaxCrashesPerDay, notifyAgents, classifyFromMarkers, sendTelegramAlert } from '../../../src/hooks/hook-crash-alert';
 import { clearEndMarkers } from '../../../src/bus/heartbeat';
 
 describe('readMaxCrashesPerDay', () => {
@@ -271,5 +271,55 @@ describe('marker lifecycle (classify → clearEndMarkers → classify)', () => {
     clearEndMarkers(tmp); // successor's first heartbeat — marker still within grace
     expect(existsSync(join(tmp, '.session-refresh'))).toBe(true);
     expect(classifyFromMarkers(tmp, MARKERS).endType).toBe('session-refresh'); // firing #2 — no false crash
+  });
+});
+
+describe('sendTelegramAlert telegram-hold gate (raw-fetch path)', () => {
+  let tmp: string;
+  const agent = 'jordan-blake';
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  const outbound = () => join(tmp, 'logs', agent, 'outbound-messages.jsonl');
+  const readOutbound = () =>
+    (existsSync(outbound())
+      ? readFileSync(outbound(), 'utf-8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      : []);
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'crashalert-hold-'));
+    mkdirSync(join(tmp, 'state', agent), { recursive: true });
+    mkdirSync(join(tmp, 'logs', agent), { recursive: true });
+    fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true, result: { message_id: 555 } }) }) as any);
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('SUPPRESSES the alert while held — raw fetch never called, logs suppressed', async () => {
+    writeFileSync(join(tmp, 'state', agent, '.telegram-hold'), 'HELD', 'utf-8');
+    await sendTelegramAlert(tmp, agent, '111:AAA', '12345', '🚨 CRASH: jordan-blake died unexpectedly.');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const entries = readOutbound();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].suppressed).toBe(true);
+    expect(entries[0].suppress_reason).toBe('telegram-hold');
+  });
+
+  it('SENDS when not held, and logs a typed send', async () => {
+    await sendTelegramAlert(tmp, agent, '111:AAA', '12345', 'recovered');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const entries = readOutbound();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].suppressed).toBeUndefined();
+    expect(entries[0].message_id).toBe(555);
+  });
+
+  it('FAILS CLOSED: empty agentName suppresses (does not leak)', async () => {
+    await sendTelegramAlert(tmp, '', '111:AAA', '12345', 'x');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
