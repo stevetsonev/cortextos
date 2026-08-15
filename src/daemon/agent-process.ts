@@ -850,9 +850,12 @@ export class AgentProcess {
     const telegramApi = this.telegramApi;
     const telegramChatId = this.telegramChatId;
     if (!telegramApi || !telegramChatId) return;
+    // Daemon-auto lifecycle sends are agent-INITIATED — gate them on the
+    // per-agent telegram-hold and log every attempt (sent or suppressed).
+    const holdOpts = { hold: { ctxRoot: this.env.ctxRoot, agentName: this.name } };
     const send = (text: string) =>
       telegramApi
-        .sendMessage(telegramChatId, text)
+        .sendMessage(telegramChatId, text, undefined, holdOpts)
         .catch(() => { /* non-fatal: notification is observability only */ });
 
     if (this.lastSpawnWasHandoff) {

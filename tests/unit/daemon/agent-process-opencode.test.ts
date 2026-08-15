@@ -170,7 +170,7 @@ describe('AgentProcess opencode runtime', () => {
     ap.setTelegramHandle(api as any, '12345');
     await ap.start();
 
-    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online');
+    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online', undefined, { hold: { ctxRoot: '/tmp/test-ctx', agentName: 'opencode-agent' } });
   });
 
   it('prompts Telegram-enabled opencode agents to send back-online Telegram on continue start', async () => {
@@ -195,7 +195,7 @@ describe('AgentProcess opencode runtime', () => {
     await ap.start();
 
     expect(mockOpencodePty.spawn).toHaveBeenCalledWith('continue', expect.any(String));
-    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online');
+    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online', undefined, { hold: { ctxRoot: '/tmp/test-ctx', agentName: 'opencode-agent' } });
   });
 
   it('sends daemon msg1 and relies on the handoff prompt for opencode msg2', async () => {
@@ -225,7 +225,7 @@ describe('AgentProcess opencode runtime', () => {
     expect(prompt).toContain("cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'back");
     // msg1: hook parity — codex/opencode don't run Claude Code hooks, so the
     // daemon emits the planned-restart lifecycle notif itself.
-    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 opencode-agent restarted (planned): context handoff at 92%');
+    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 opencode-agent restarted (planned): context handoff at 92%', undefined, { hold: { ctxRoot: '/tmp/test-ctx', agentName: 'opencode-agent' } });
     // msg2: opencode receives the same prompt-level first-action requirement as
     // codex, so the daemon must not synthesize a weaker generic handoff ping.
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online (context handoff)');
@@ -255,7 +255,7 @@ describe('AgentProcess opencode runtime', () => {
     await ap.start();
 
     // msg1: daemon-emitted hook parity, same as opencode.
-    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 codex-agent restarted (planned): context handoff at 88%');
+    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 codex-agent restarted (planned): context handoff at 88%', undefined, { hold: { ctxRoot: '/tmp/test-ctx', agentName: 'codex-agent' } });
     // msg2: codex reliably self-sends its own "back — ..." reply, so the daemon
     // must NOT also send a back-online ping (that would double up).
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent codex-agent is back online (context handoff)');

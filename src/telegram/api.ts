@@ -5,6 +5,8 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { basename } from 'path';
+import { isTelegramHeld, type TelegramHoldContext } from './hold.js';
+import { logOutboundMessage } from './logging.js';
 
 /**
  * Result of TelegramAPI.validateCredentials. Tagged union so callers can
@@ -196,8 +198,40 @@ export class TelegramAPI {
     opts?: {
       parseMode?: 'HTML' | null;
       onParseFallback?: (reason: string) => void;
+      /**
+       * Hold context for DAEMON-AUTO (agent-initiated) sends. When present,
+       * this send is checked against the per-agent `.telegram-hold` gate and
+       * SUPPRESSED (never hits the network) while the agent is held. Reply,
+       * agent-driven (`cortextos bus send-telegram`) and interactive-hook
+       * paths pass NOTHING here and are therefore never gated — the hold is
+       * on messages the system INITIATES, and gating a reply would strand the
+       * user and make the hold un-liftable. Passing hold context also makes
+       * the send observable: every attempt (sent or suppressed) is written to
+       * the agent's outbound-messages.jsonl.
+       */
+      hold?: TelegramHoldContext;
     },
   ): Promise<any> {
+    // Telegram-hold gate (daemon-auto sends only — see the `hold` opt above).
+    if (opts?.hold && isTelegramHeld(opts.hold.ctxRoot, opts.hold.agentName)) {
+      // SUPPRESSED: record the blocked attempt so "was a send attempted while
+      // held" is answerable from the log, then return without touching the
+      // network. message_id 0 marks a send that never reached Telegram.
+      try {
+        logOutboundMessage(
+          opts.hold.ctxRoot,
+          opts.hold.agentName,
+          chatId,
+          text,
+          0,
+          { suppressed: true, suppressReason: 'telegram-hold' },
+        );
+      } catch {
+        /* never let logging break the caller; suppression already happened */
+      }
+      return { ok: false, suppressed: true, reason: 'telegram-hold' };
+    }
+
     const plainText = opts?.parseMode === null;
     const html = this.markdownToHtml(text, plainText);
 
@@ -216,6 +250,28 @@ export class TelegramAPI {
         isLastChunk ? replyMarkup : undefined,
       );
     }
+
+    // Observability for daemon-auto sends: when a hold context is supplied,
+    // record the successful send in the agent's outbound log. Previously the
+    // daemon send paths (agent-process.ts, agent-manager.ts) wrote NOTHING, so
+    // a zero in the outbound log was untyped — indistinguishable from "the
+    // sender does not log here". Now a real send from these paths is typed.
+    if (opts?.hold) {
+      try {
+        const messageId = lastResult?.result?.message_id ?? lastResult?.message_id ?? 0;
+        logOutboundMessage(
+          opts.hold.ctxRoot,
+          opts.hold.agentName,
+          chatId,
+          text,
+          messageId,
+          { parseMode: plainText ? 'none' : 'html' },
+        );
+      } catch {
+        /* observability only — never break the send on a logging failure */
+      }
+    }
+
     return lastResult;
   }
 

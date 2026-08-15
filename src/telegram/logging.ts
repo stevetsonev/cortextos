@@ -18,9 +18,19 @@ import { stripControlChars } from '../utils/validate.js';
  * - `parseMode`: which parse_mode the first send attempt used. "html"
  *   for the default path (Markdown-to-HTML conversion), "none" when the
  *   caller used --plain-text.
+ * - `suppressed`: true when the send was BLOCKED before hitting the network
+ *   (e.g. by the telegram-hold gate). The entry records an ATTEMPT that did
+ *   not reach the user. Readers counting messages that actually reached the
+ *   user must filter `suppressed === true` OUT; readers auditing "was a send
+ *   attempted while held" must filter it IN. This is exactly what makes
+ *   "did the user get pinged during the hold" answerable from the log instead
+ *   of unmeasurable.
+ * - `suppressReason`: why it was suppressed (e.g. "telegram-hold").
  */
 export interface OutboundLogMetadata {
   parseMode?: 'html' | 'none';
+  suppressed?: boolean;
+  suppressReason?: string;
 }
 
 /**
@@ -42,6 +52,8 @@ export function logOutboundMessage(
   // stays unchanged for callers that pass nothing (backwards compat).
   const meta: Record<string, unknown> = {};
   if (metadata?.parseMode !== undefined) meta.parse_mode = metadata.parseMode;
+  if (metadata?.suppressed !== undefined) meta.suppressed = metadata.suppressed;
+  if (metadata?.suppressReason !== undefined) meta.suppress_reason = metadata.suppressReason;
 
   const entry = JSON.stringify({
     timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),

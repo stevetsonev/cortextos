@@ -371,6 +371,8 @@ export class AgentManager {
           const alertApi = new TelegramAPI(botToken);
           alertApi.sendMessage(chatId,
             `⚠️ WATCHDOG: ${name} has BOT_TOKEN but ALLOWED_USER is missing or malformed in .env. Telegram is DISABLED for this agent. Fix ALLOWED_USER and restart.`,
+            undefined,
+            { hold: { ctxRoot: this.ctxRoot, agentName: name } },
           ).catch(() => {});
         }
         botToken = undefined;
@@ -405,13 +407,14 @@ export class AgentManager {
       const tgChatId = chatId;
       let prevStatus: string | null = null;
       agentProcess.onStatusChanged((status) => {
+        const holdOpts = { hold: { ctxRoot: this.ctxRoot, agentName: name } };
         if (status.status === 'crashed') {
           const crashNum = status.crashCount ?? '?';
-          tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
+          tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`, undefined, holdOpts).catch(() => {});
         } else if (status.status === 'halted') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
+          tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`, undefined, holdOpts).catch(() => {});
         } else if (status.status === 'running' && prevStatus === 'crashed') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
+          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`, undefined, holdOpts).catch(() => {});
         }
         prevStatus = status.status;
       });
@@ -495,7 +498,7 @@ export class AgentManager {
                   const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram messages (ALLOWED_USER gate). Last from_id: ${fromId ?? 'unknown'}. Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
                   log(alertText);
                   if (telegramApi && chatId) {
-                    telegramApi.sendMessage(chatId, alertText).catch(() => {});
+                    telegramApi.sendMessage(chatId, alertText, undefined, { hold: { ctxRoot: this.ctxRoot, agentName: name } }).catch(() => {});
                   }
                 }
               }
@@ -624,7 +627,7 @@ export class AgentManager {
                   const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram interactions (ALLOWED_USER gate). Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
                   log(alertText);
                   if (telegramApi && chatId) {
-                    telegramApi.sendMessage(chatId, alertText).catch(() => {});
+                    telegramApi.sendMessage(chatId, alertText, undefined, { hold: { ctxRoot: this.ctxRoot, agentName: name } }).catch(() => {});
                   }
                 }
               }
@@ -708,6 +711,8 @@ export class AgentManager {
           telegramApi.sendMessage(
             String(chatId),
             `${name}: Telegram poller wrapper crashed. Inbound messages may be dropped until restart. Check daemon log.`,
+            undefined,
+            { hold: { ctxRoot: this.ctxRoot, agentName: name } },
           ).catch(() => { /* swallow alert failure; original log already captured */ });
         }
       });

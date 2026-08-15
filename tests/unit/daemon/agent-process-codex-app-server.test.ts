@@ -138,7 +138,7 @@ describe('AgentProcess codex-app-server runtime', () => {
     ap.setTelegramHandle(api as any, '12345');
     await ap.start();
 
-    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online');
+    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online', undefined, { hold: { ctxRoot: '/tmp/test-ctx', agentName: 'codex-app-agent' } });
   });
 
   it('sends planned-restart msg1 but skips generic back-online Telegram on handoff restart', async () => {
@@ -163,7 +163,7 @@ describe('AgentProcess codex-app-server runtime', () => {
 
     const prompt = mockCodexAppServerPty.spawn.mock.calls[0]?.[1] ?? '';
     expect(prompt).toContain('CONTEXT HANDOFF');
-    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 codex-app-agent restarted (planned): no reason given');
+    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 codex-app-agent restarted (planned): no reason given', undefined, { hold: { ctxRoot: '/tmp/test-ctx', agentName: 'codex-app-agent' } });
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online');
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online (context handoff)');
     expect(sendMessage).toHaveBeenCalledTimes(1);
