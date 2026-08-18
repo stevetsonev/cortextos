@@ -297,6 +297,11 @@ Then do the initial ingestion:
 # Ingest org knowledge base
 cortextos bus kb-ingest "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/knowledge.md" \
  --org $CTX_ORG --scope shared
+# ⚠️ --force IS NOT ALWAYS WRONG: it is wrong ROUTINELY and RIGHT after a BACKEND CHANGE.
+# Content-addressing keys on CONTENT, not on the embedding MODEL — so changing embedding_backend
+# strands every UNCHANGED file on the old model permanently, and plain re-ingest is a verified
+# no-op on it (measured 2026-07-27: plain = nothing; --force = 22 chunks rewritten in place).
+# ⇒ after ANY change to embedding_backend/embedding_model, run ONE --force pass over the corpus.
 
 # Ingest any specific docs the user listed
 # cortextos bus kb-ingest <path> --org $CTX_ORG --scope <shared|private> --agent $CTX_AGENT_NAME

@@ -22,7 +22,17 @@ const USAGE_LOG = path.join(
   'usage.jsonl',
 );
 
-/** Claude Haiku 4.5 list price, $ per million tokens. */
+/**
+ * Claude Haiku 4.5 list price, $ per million tokens.
+ *
+ * ⚠️ HAIKU IS DELIBERATE — DO NOT "UPGRADE" THIS TO OPUS.
+ * The work being displaced here is low-stakes labelling and classification, so
+ * Haiku is the model these calls would realistically have used. Benchmarking
+ * against Opus ($5/$25) would inflate the displayed saving 5-25x and make the
+ * metric marketing rather than measurement. If you change these rates, change
+ * `model` with them — the UI renders it as "vs <model>" so the claim stays
+ * falsifiable, and a rate that no longer matches its label is a silent lie.
+ */
 const BENCHMARK = { model: 'claude-haiku-4-5', inputPerM: 1.0, outputPerM: 5.0 };
 
 interface UsageRow {

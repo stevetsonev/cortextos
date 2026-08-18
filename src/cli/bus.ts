@@ -19,6 +19,7 @@ import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByN
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
+import type { OAuthAccount } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv, resolveTargetAgentDir } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
@@ -475,7 +476,13 @@ busCommand
 
     updateHeartbeat(paths, env.agentName, status, {
       org: env.org,
-      timezone: opts.timezone,
+      // `opts.timezone` is the --timezone flag, which nobody passes; without the
+      // fallback updateHeartbeat computes day/night in UTC and the window is shifted
+      // by the org's offset (6h for America/Edmonton), so 08:00-16:00 of the user's
+      // working day is reported as 'night'. env.timezone is already fully resolved
+      // here — CTX_TIMEZONE, else the org's context.json — and env.org is read on the
+      // line above, so the value was in scope all along.
+      timezone: opts.timezone || env.timezone,
       loopInterval: opts.interval,
       currentTask: opts.task,
       displayName,
@@ -2580,13 +2587,57 @@ busCommand
       console.log('No accounts.json found at state/oauth/accounts.json');
       return;
     }
+    // A stored account can be missing any of these fields — the on-disk record is JSON and
+    // OAuthAccount's 7 required fields are not enforced at runtime. Measured 2026-08-01: the only
+    // account, "default", carried exactly ['access_token'], so new Date(undefined).toISOString()
+    // threw RangeError and the whole gauge was dead.
+    //
+    // 🔴 ABSENT DATA MUST RENDER AS "unknown", NEVER AS A NUMBER. Defaulting a missing utilization
+    // to 0 would print "5h: 0%  7d: 0%" — a confident, healthy-looking reading taken from a field
+    // that does not exist. That is the exact false-green that let a weekly-cap outage run 59h
+    // unseen on 2026-07-30..08-01 while every surface reported fine. A gauge that cannot measure
+    // must say so; it must not report a comfortable value.
+    const utilOf = (v: unknown, alert: number): string => {
+      if (typeof v !== 'number' || !Number.isFinite(v)) return 'unknown';
+      return `${pct(v)}${v >= alert ? ' ⚠️' : ''}`;
+    };
+    const expiryOf = (v: unknown): string => {
+      if (typeof v !== 'number' || !Number.isFinite(v)) return 'unknown';
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? 'unknown' : d.toISOString();
+    };
+
+    const REQUIRED: (keyof OAuthAccount)[] = [
+      'access_token', 'refresh_token', 'expires_at',
+      'five_hour_utilization', 'seven_day_utilization',
+    ];
+
     for (const [name, acct] of Object.entries(store.accounts)) {
-      const active = name === store.active ? ' (active)' : '';
-      const expiry = new Date(acct.expires_at).toISOString();
-      const warn5h = acct.five_hour_utilization >= ALERT_5H ? ' ⚠️' : '';
-      const warn7d = acct.seven_day_utilization >= ALERT_7D ? ' ⚠️' : '';
-      console.log(`${name}${active}`);
-      console.log(`  5h: ${pct(acct.five_hour_utilization)}${warn5h}  7d: ${pct(acct.seven_day_utilization)}${warn7d}  expires: ${expiry}`);
+      const isActive = name === store.active;
+      const missing = REQUIRED.filter((f) => (acct as Record<string, unknown>)[f] === undefined);
+      console.log(`${name}${isActive ? ' (active)' : ''}`);
+      console.log(
+        `  5h: ${utilOf(acct.five_hour_utilization, ALERT_5H)}`
+        + `  7d: ${utilOf(acct.seven_day_utilization, ALERT_7D)}`
+        + `  expires: ${expiryOf(acct.expires_at)}`,
+      );
+      if (missing.length > 0) {
+        console.log(`  🔴 INCOMPLETE RECORD — missing: ${missing.join(', ')}`);
+        if (missing.includes('five_hour_utilization') || missing.includes('seven_day_utilization')) {
+          console.log('     ⇒ USAGE IS UNMEASURED, NOT LOW. Populate with: cortextos bus check-usage-api --force');
+        }
+        if (missing.includes('refresh_token')) {
+          console.log('     ⇒ refresh-oauth-token cannot run for this account (no refresh_token stored).');
+        }
+      }
+    }
+
+    const activeAcct = store.accounts[store.active] as Record<string, unknown> | undefined;
+    if (activeAcct && (typeof activeAcct.five_hour_utilization !== 'number'
+      || typeof activeAcct.seven_day_utilization !== 'number')) {
+      console.log('');
+      console.log('🔴 THE ACTIVE ACCOUNT HAS NO USAGE FIGURES — this gauge is currently BLIND.');
+      console.log('   Treat quota headroom as UNKNOWN. Do not read the absence of a warning as headroom.');
     }
   });
 

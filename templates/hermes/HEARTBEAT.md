@@ -67,7 +67,12 @@ MEMORY
 
 ```bash
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private
+# ⚠️ --force IS NOT ALWAYS WRONG: it is wrong ROUTINELY and RIGHT after a BACKEND CHANGE.
+# Content-addressing keys on CONTENT, not on the embedding MODEL — so changing embedding_backend
+# strands every UNCHANGED file on the old model permanently, and plain re-ingest is a verified
+# no-op on it (measured 2026-07-27: plain = nothing; --force = 22 chunks rewritten in place).
+# ⇒ after ANY change to embedding_backend/embedding_model, run ONE --force pass over the corpus.
 ```
 
 ## Step 7: Check GOALS.md

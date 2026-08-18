@@ -213,7 +213,18 @@ export async function checkUsageApi(
   });
 
   if (!response.ok) {
-    throw new Error(`Usage API returned ${response.status}: ${await response.text()}`);
+    // Classify, because the two failures we actually see need OPPOSITE responses and the raw
+    // status alone got one of them mis-diagnosed. Measured 2026-08-01: this endpoint alternates
+    // 403 (OAuth scope) and 429 (rate limited) within the hour, and a single sample of either
+    // reads as a settled diagnosis of the wrong problem.
+    const body = await response.text();
+    const s = response.status;
+    const hint =
+      s === 429 ? 'RATE LIMITED — the usage endpoint itself is throttled. This is NOT a scope problem and NOT a reading of your quota; retry later. Do not infer headroom from it.'
+      : s === 401 ? 'UNAUTHORIZED — the stored access_token is rejected. Re-authenticate; refresh-oauth-token needs a refresh_token, which may not be stored.'
+      : s === 403 ? 'FORBIDDEN — the token is valid but lacks the OAuth scope for the usage endpoint. Scope must be granted at authorisation time; a refresh will not add it.'
+      : 'Unexpected status from the usage endpoint.';
+    throw new Error(`Usage API returned ${s}: ${body}\n  ⇒ ${hint}`);
   }
 
   // The Anthropic OAuth usage API returns NESTED objects:
@@ -232,9 +243,22 @@ export async function checkUsageApi(
     sevenDayUtilization?: number;
   };
 
-  // Normalize 0–100 → 0.0–1.0 if needed
-  const normalize = (v: number | undefined) => {
-    if (v === undefined) return 0;
+  // Normalize 0–100 → 0.0–1.0 if needed.
+  //
+  // 🔴 A MISSING FIELD IS NOT ZERO USAGE. This used to return 0 for undefined, and the comment
+  // above records what that cost: flat-only parsing met a nested payload, every field came back
+  // undefined, and the watchdog reported "100% remaining" while the account burned. That instance
+  // was fixed by adding the nested shape — but `undefined → 0` was left in place, so the CLASS
+  // survived and the next shape change re-arms it silently.
+  //
+  // ⇒ It now returns undefined, and an unreadable payload THROWS below rather than persisting a
+  // comfortable number. This matters more than it looks: on success this function WRITES
+  // five_hour_utilization / seven_day_utilization into accounts.json, so a silent 0 would be
+  // stored, and `list-oauth-accounts` would then render a confident "0%" instead of "unknown" —
+  // the false-green would defeat the very gauge built to expose it. Measured 2026-07-30..08-01:
+  // a weekly cap ran 59h unseen because no instrument said "I cannot measure this".
+  const normalize = (v: number | undefined): number | undefined => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
     return v > 1 ? v / 100 : v;
   };
 
@@ -244,6 +268,21 @@ export async function checkUsageApi(
   const sevenDay = normalize(
     data.seven_day?.utilization ?? data.seven_day_utilization ?? data.sevenDayUtilization,
   );
+  // FAIL THE OPERATION rather than persist an unmeasured value. A 200 whose body we cannot read
+  // is not a reading of zero usage — it is no reading at all, and the caller must be able to tell
+  // those apart. Naming the keys we did see makes the next shape change a 30-second diagnosis
+  // instead of a re-run of the 2026-07 blindness.
+  if (fiveHour === undefined || sevenDay === undefined) {
+    throw new Error(
+      'Usage API returned 200 but no readable utilization fields '
+      + `(five_hour=${fiveHour === undefined ? 'MISSING' : fiveHour}, `
+      + `seven_day=${sevenDay === undefined ? 'MISSING' : sevenDay}). `
+      + `Top-level keys present: [${Object.keys(data ?? {}).join(', ') || 'none'}]. `
+      + '⇒ The response SHAPE has probably changed. Usage is UNMEASURED, not low — '
+      + 'nothing has been written to accounts.json or the cache.',
+    );
+  }
+
   const fetchedAt = new Date().toISOString();
 
   const snapshot: UsageSnapshot = {

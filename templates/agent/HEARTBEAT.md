@@ -69,7 +69,7 @@ MEMORY_DIR="$(pwd)/memory"
 mkdir -p "$MEMORY_DIR"
 cat >> "$MEMORY_DIR/$TODAY.md" << MEMORY
 
-## Heartbeat Update - $(date -u +%H:%M UTC) / $LOCAL_TIME
+## Heartbeat Update - $(date -u +'%H:%M UTC') / $LOCAL_TIME
 - WORKING ON: <task_id or "none">
 - Status: <healthy/working/blocked>
 - Inbox: <N messages processed>
@@ -135,7 +135,12 @@ Keep your memory collection searchable and current:
 
 ```bash
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private
+# ⚠️ --force IS NOT ALWAYS WRONG: it is wrong ROUTINELY and RIGHT after a BACKEND CHANGE.
+# Content-addressing keys on CONTENT, not on the embedding MODEL — so changing embedding_backend
+# strands every UNCHANGED file on the old model permanently, and plain re-ingest is a verified
+# no-op on it (measured 2026-07-27: plain = nothing; --force = 22 chunks rewritten in place).
+# ⇒ after ANY change to embedding_backend/embedding_model, run ONE --force pass over the corpus.
 ```
 
 This runs automatically on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.

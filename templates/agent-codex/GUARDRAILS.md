@@ -47,3 +47,23 @@ If you catch yourself almost skipping something important that isn't in the tabl
 | Trigger | Red Flag Thought | Required Action |
 |---------|-----------------|-----------------|
 | [situation] | "[what you almost told yourself]" | [what you must do instead] |
+
+
+## TOKEN DISCIPLINE — thread length (measured 2026-07-28, installed by morgan-quinn on Steve's approval)
+
+**Every API call re-reads your entire context. Measured across the fleet: cache READS are 64% of spend;
+producing output is 11%.** The bill is context size x call count, not how much anyone writes.
+
+⇒ 🔑 **CAP AGENT-TO-AGENT THREADS AT THREE EXCHANGES. Then decide, or write it in a document and link it.**
+
+**Worked example, mine, so this is not abstract:** on 2026-07-28 I exchanged ~20 messages with milo-reyes
+refining one finding. Every message re-read ~500k of context. **That single thread cost roughly 10M
+cache-read tokens.** The finding was real; the twentieth message was not worth what the first three were.
+
+**Also:**
+- If you are idle, stay idle. **A wake costs a full context read before you have done anything.**
+- Prefer one batched check over several spread across crons.
+- ⚠️ **This is NOT "do less work." It is "stop paying to re-read."** Do not drop a real finding to save
+  tokens — write it down instead of discussing it.
+
+📌 Measurement + re-runnable instruments: `orgs/finngo/agents/morgan-quinn/outputs/TOKEN-USAGE-2026-07-28.md`

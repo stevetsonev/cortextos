@@ -14,6 +14,7 @@ import { LiveActivity } from '@/components/overview/live-activity';
 import { SystemHealth } from '@/components/overview/system-health';
 import { MetricCards } from '@/components/overview/metric-cards';
 import { AgentStatusGrid } from '@/components/overview/agent-status-grid';
+import { LocalInferenceCard } from '@/components/dashboard/local-inference-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -133,6 +134,9 @@ export default async function OverviewPage({
           />
         </div>
       </div>
+
+      {/* Local (Ollama) inference usage — self-updating; rows are written at call time */}
+      <LocalInferenceCard />
 
       {/* System Health */}
       <SystemHealth summary={healthSummary} />

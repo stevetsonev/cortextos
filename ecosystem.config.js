@@ -48,5 +48,23 @@ module.exports = {
       restart_delay: 5000,
       autorestart: true,
     },
+    {
+      // BOX-SPECIFIC: added on the Lightsail box 2026-08-01 (Steve chose production
+      // mode over the Mac's `npm run dev`). This file is REPO-RESIDENT, so pass 2
+      // would overwrite it from a Mac that has no dashboard entry, and the dashboard
+      // would silently drop out of boot config until the next reboot.
+      // => ecosystem.config.js IS ON THE PASS-2 EXCLUSION LIST. After pass 2 assert
+      //    `grep -c dashboard ecosystem.config.js` >= 1 -- assert what ARRIVED.
+      name: 'cortextos-dashboard',
+      script: 'npm',
+      args: 'start',
+      cwd: path.join(FRAMEWORK_ROOT, 'dashboard'),
+      env: {
+        CTX_INSTANCE_ID: INSTANCE_ID,
+        CTX_ROOT: CTX_ROOT,
+        CTX_FRAMEWORK_ROOT: FRAMEWORK_ROOT,
+      },
+      autorestart: true,
+    },
   ],
 };

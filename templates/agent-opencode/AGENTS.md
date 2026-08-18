@@ -71,7 +71,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
    TODAY=$(date -u +%Y-%m-%d)
    cat >> "memory/$TODAY.md" << MEMEOF
 
-   ## Session End - $(date -u +%H:%M:%S UTC)
+   ## Session End - $(date -u '+%H:%M:%S UTC')
    - Status: [done/interrupted/context-full]
    - Current state: [where things stand — specific enough that the next session can resume cold]
    - Active threads: [anything in progress or mid-task with current state]
@@ -266,7 +266,7 @@ This is your session journal. It survives crashes and context compactions. The g
 
 **Mid-work inline notes — write immediately, don't wait for heartbeat:**
 ```bash
-echo "NOTE $(date -u +%H:%M UTC): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
+echo "NOTE $(date -u +'%H:%M UTC'): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
 ```
 
 ```bash
@@ -274,7 +274,7 @@ TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
 cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session Start - $(date -u +%H:%M:%S UTC)
+## Session Start - $(date -u '+%H:%M:%S UTC')
 - Status: online
 - Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
@@ -295,7 +295,12 @@ Semantic vector store. Three collections: `memory-{agent}` (auto-reindexed at he
 ```bash
 # Re-index memory at heartbeat
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private
+# ⚠️ --force IS NOT ALWAYS WRONG: it is wrong ROUTINELY and RIGHT after a BACKEND CHANGE.
+# Content-addressing keys on CONTENT, not on the embedding MODEL — so changing embedding_backend
+# strands every UNCHANGED file on the old model permanently, and plain re-ingest is a verified
+# no-op on it (measured 2026-07-27: plain = nothing; --force = 22 chunks rewritten in place).
+# ⇒ after ANY change to embedding_backend/embedding_model, run ONE --force pass over the corpus.
 
 # Query before any task
 cortextos bus kb-query "your question" --org $CTX_ORG --agent $CTX_AGENT_NAME

@@ -128,7 +128,7 @@ export function queryKnowledgeBase(
     instanceId: string;
   },
 ): KBQueryResponse {
-  const { agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'all', topK = 5, threshold, frameworkRoot, instanceId } = options;
   // Normalize once at the top so every downstream path join, env var, and
   // ChromaDB collection name uses the canonical filesystem casing. Without
   // this, `shared-acmecorp` and `shared-AcmeCorp` become two
@@ -176,7 +176,7 @@ export function queryKnowledgeBase(
         mmragPath, 'query', question,
         '--collection', col,
         '--top-k', String(topK),
-        '--threshold', String(threshold),
+        ...(threshold !== undefined ? ['--threshold', String(threshold)] : []),
         '--json',
       ], {
         encoding: 'utf-8',
