@@ -285,6 +285,16 @@ export interface CronEntry {
 //
 // Example records
 // ---------------
+// WARNING: these are crons.json (CronDefinition) examples, not config.json.
+// The `enabled` field shown below belongs to CronDefinition ONLY — CronEntry
+// (config.json, above) has no `enabled` field. Setting `enabled: false` on a
+// config.json cron entry does nothing; it migrates as an enabled live cron
+// regardless. To disable a config.json cron, set `type: "disabled"` instead.
+//
+// Migration REPLACES crons.json, it does not merge: runMigrationCore() (see
+// src/daemon/cron-migration.ts) writes the full crons.json envelope from
+// config.json's crons array alone. A live cron with no config.json
+// counterpart is not preserved — it is deleted on the next migration run.
 //
 // Heartbeat — every 6 hours (interval shorthand):
 // {
@@ -787,6 +797,16 @@ export interface IPCRequest {
    * Optional for backwards compatibility — older clients fall back to 'unknown'.
    */
   source?: string;
+  /**
+   * disable-resurrection fix: for the `stop-agent` command, whether this stop was
+   * directly initiated by the user (`cortextos stop` / `cortextos disable`) — in
+   * which case a queued pendingRestart is DROPPED (stop wins) — vs an internal
+   * stop that is part of a larger restart (`cortextos restart`'s stop-half),
+   * which must set this to false so its own follow-up start-agent is honored via
+   * the pendingRestart path. The handler defaults to true when omitted so plain
+   * stop/disable keep "stop wins".
+   */
+  userInitiated?: boolean;
 }
 
 // Worker Types
@@ -840,4 +860,9 @@ export interface AgentStatus {
   sessionStart?: string;
   crashCount?: number;
   model?: string;
+  awaitingConfirmation?: boolean; // first-run observability fix: PTY parked on an
+  // interactive first-run prompt past the auto-accept backstop (wedged, not bootstrapped)
+  dormant?: boolean; // silent-dormancy fix: enabled agent whose heartbeat is stale
+  // relative to its own liveness baseline (uptime, or daemon uptime if absent-from-map)
+  dormancyReason?: string; // human explanation of the dormancy verdict
 }

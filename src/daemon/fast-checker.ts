@@ -52,6 +52,18 @@ export class FastChecker {
   // External Telegram handler (set by daemon)
   private telegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
 
+  // External Buzz (Nostr/NIP-29) handler (set by daemon) — SP3b-style parallel
+  // queue alongside telegramMessages, reusing the same isDuplicate dedup.
+  private buzzMessages: Array<{ formatted: string }> = [];
+
+  // External Slack handler (set by daemon's Slack dispatcher). Deliberately
+  // a separate queue from telegramMessages, not a shared one: draining it
+  // must NOT touch lastMessageInjectedAt, which drives the Telegram typing
+  // indicator — Slack traffic has no equivalent indicator and mixing the
+  // two would restart/extend a Telegram typing indicator for Slack-only
+  // activity.
+  private slackMessages: string[] = [];
+
   // Persistent dedup: message hashes to prevent duplicate delivery
   private seenHashes: Set<string> = new Set();
   private dedupFilePath: string = '';
@@ -181,6 +193,22 @@ export class FastChecker {
   }
 
   /**
+   * Queue a formatted Buzz message for injection.
+   * Called by the daemon's BuzzRelayClient message handler.
+   */
+  queueBuzzMessage(formatted: string): void {
+    this.buzzMessages.push({ formatted });
+  }
+
+  /**
+   * Queue a formatted Slack message for injection.
+   * Called by the daemon's Slack Socket Mode dispatcher.
+   */
+  queueSlackMessage(formatted: string): void {
+    this.slackMessages.push(formatted);
+  }
+
+  /**
    * Single poll cycle: check inbox + queued Telegram messages.
    */
   private async pollCycle(): Promise<void> {
@@ -197,6 +225,21 @@ export class FastChecker {
       messageBlock += msg.formatted;
     }
     const hasTelegramMessage = takenTelegram.length > 0;
+
+    // Process queued Buzz messages
+    while (this.buzzMessages.length > 0) {
+      const msg = this.buzzMessages.shift()!;
+      messageBlock += msg.formatted;
+    }
+
+    // Process queued Slack messages. Deliberately does NOT set
+    // hasTelegramMessage / lastMessageInjectedAt — see slackMessages'
+    // declaration for why the typing-indicator timer must stay
+    // Telegram-only.
+    while (this.slackMessages.length > 0) {
+      messageBlock += this.slackMessages.shift()!;
+    }
+
 
     // Check agent inbox
     const inboxMessages = checkInbox(this.paths);
@@ -316,6 +359,53 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
+   * Format a Buzz (Nostr/NIP-29) channel message for injection.
+   * Mirrors formatTelegramTextMessage's shape: [USER: ...] wrapper against
+   * display-name injection, fence-safe body, slash commands passed through
+   * unfenced so the Skill tool can still invoke them.
+   */
+  static formatBuzzTextMessage(
+    from: string,
+    channelId: string,
+    text: string,
+  ): string {
+    const isSlashCommand = /^\/[a-zA-Z]/.test(stripControlChars(text).trim());
+    const body = isSlashCommand
+      ? sanitizeForPtyInjection(text).trim()
+      : wrapFenceSafe(text);
+    return `=== BUZZ from [USER: ${sanitizeForPtyInjection(from)}] (channel:${channelId}) ===
+${body}
+Reply using: cortextos buzz send --channel ${channelId} --text '<your reply>'
+
+`;
+  }
+
+  /**
+   * Format a Slack text message for injection. Same sanitization posture as
+   * formatTelegramTextMessage (the sender/display-name is untrusted, the
+   * body is untrusted) — see that method's docblock for the reasoning,
+   * unchanged here. `agentName` threads the `--as` flag so the reply
+   * command posts under the correct per-agent Slack identity
+   * (loadSlackIdentity).
+   */
+  static formatSlackTextMessage(
+    from: string,
+    channel: string,
+    text: string,
+    agentName: string,
+  ): string {
+    const isSlashCommand = /^\/[a-zA-Z]/.test(stripControlChars(text).trim());
+    const body = isSlashCommand
+      ? sanitizeForPtyInjection(text).trim()
+      : wrapFenceSafe(text);
+    return `=== SLACK from [USER: ${sanitizeForPtyInjection(from)}] (channel:${sanitizeForPtyInjection(channel)}) ===
+${body}
+Reply using: cortextos slack send ${channel} '<your reply>' --as ${agentName}
+
+`;
+  }
+
+  /**
    * Format a Telegram message_reaction update for PTY injection.
    * Reactions are emoji additions/removals on existing messages — they
    * surface to the agent so it can follow up on positive acknowledgements
@@ -341,7 +431,10 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const removed = newReaction.length === 0 && oldReaction.length > 0;
     const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
 
-    return `=== REACTION from [USER: ${from}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
+    // sanitizeForPtyInjection matches the 5 sibling formatTelegram* paths (#606 residual): the caller's
+    // stripControlChars deliberately keeps \n/\r, so a raw display-name could forge a `=== TELEGRAM ===`
+    // containment header (#592/#597 class). Sanitize at the boundary, not the caller.
+    return `=== REACTION from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
 
 `;
   }

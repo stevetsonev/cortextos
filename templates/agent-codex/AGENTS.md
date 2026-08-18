@@ -71,7 +71,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
    TODAY=$(date -u +%Y-%m-%d)
    cat >> "memory/$TODAY.md" << MEMEOF
 
-   ## Session End - $(date -u '+%H:%M:%S UTC')
+   ## Session End - $(date -u +'%H:%M:%S UTC')
    - Status: [done/interrupted/context-full]
    - Current state: [where things stand — specific enough that the next session can resume cold]
    - Active threads: [anything in progress or mid-task with current state]
@@ -268,7 +268,7 @@ TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
 cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session Start - $(date -u '+%H:%M:%S UTC')
+## Session Start - $(date -u +'%H:%M:%S UTC')
 - Status: online
 - Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">

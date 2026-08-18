@@ -32,6 +32,9 @@ type SpawnFn = (file: string, args: string[], options: IPtySpawnOptions) => IPty
 export class AgentPTY {
   private pty: IPty | null = null;
   private _alive = false;
+  // first-run observability fix: set at the auto-accept backstop when the PTY is
+  // still parked on a first-run prompt and never bootstrapped (a wedge).
+  private _awaitingInteractiveConfirmation = false;
   private outputBuffer: OutputBuffer;
   protected env: CtxEnv;
   protected config: AgentConfig;
@@ -61,7 +64,22 @@ export class AgentPTY {
       this.spawnFn = nodePty.spawn;
     }
 
-    const cwd = this.config.working_directory || this.env.agentDir || process.cwd();
+    const configuredCwd = this.config.working_directory;
+    // first-run observability fix: validate an explicitly-set working_directory so a
+    // typo'd/nonexistent/whitespace path fails loudly HERE instead of making node-pty
+    // error cryptically (or silently running in the wrong dir). The empty string is the
+    // framework's "unset" sentinel (import-agent.ts writes working_directory: '') so it
+    // still falls through to agentDir — only a non-empty value is validated.
+    if (configuredCwd !== undefined && configuredCwd !== '') {
+      const trimmed = configuredCwd.trim();
+      if (trimmed === '') {
+        throw new Error(`[agent-pty] ${this.env.agentName}: working_directory is whitespace-only; set a valid path or remove it`);
+      }
+      if (!existsSync(trimmed)) {
+        throw new Error(`[agent-pty] ${this.env.agentName}: working_directory does not exist: ${trimmed}`);
+      }
+    }
+    const cwd = (configuredCwd && configuredCwd.trim()) || this.env.agentDir || process.cwd();
 
     // Build environment variables for the PTY process
     const ptyEnv: Record<string, string> = {
@@ -170,25 +188,73 @@ export class AgentPTY {
       }
     });
 
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
+    // Claude Code shows interactive prompts on first run that must be auto-accepted
+    // when running headless (no human at the PTY). There are TWO distinct screens:
+    //   1. "trust this folder?"      — default is "Yes, I trust"  -> bare Enter accepts.
+    //   2. "Bypass Permissions mode" (Claude Code 2.1.x+) — options are
+    //      "1. No, exit" (DEFAULT) and "2. Yes, I accept". A bare Enter here would
+    //      select "No, exit" and QUIT the agent (exit code 1) — the headless
+    //      crash-loop. We must move the selection DOWN then confirm: Down-arrow
+    //      (\x1b[B) + Enter.
+    // The screens render a few seconds apart, so poll briefly and handle each once.
+    // The TUI separates words with cursor-positioning escape codes, so we strip ANSI
+    // and match on CO-OCCURRING, prompt-specific tokens (not stray single words) so
+    // normal agent output can never trigger a stray keystroke.
+    let trustHandled = false;
+    let bypassHandled = false;
+    const promptPoll = setInterval(() => {
+      if (!this.pty) { clearInterval(promptPoll); return; }
+      // first-run observability fix: stop BEFORE evaluating any prompt branch — once the
+      // real session is up, never write a stray keystroke (Down/CR/Enter) into it.
+      if (this.outputBuffer.isBootstrapped()) { clearInterval(promptPoll); return; }
+      const recent = this.outputBuffer.getRecent().replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      const kind = this.detectFirstRunPrompt(recent);
+      const showingBypass = kind === 'bypass';
+      const showingTrust = kind === 'trust';
+      if (showingBypass && !bypassHandled) {
+        // Bypass screen: default selection is "1. No, exit". Move DOWN to
+        // "2. Yes, I accept", then confirm. Bare Enter here would quit the agent.
+        bypassHandled = true;
+        this.pty.write('\x1b[B'); // arrow down to "Yes, I accept"
+        setTimeout(() => {
+          // Hardening: bootstrap-guard the deferred confirm so a late session
+          // bootstrap cannot swallow the CR into the live session.
+          if (this.pty && !this.outputBuffer.isBootstrapped()) this.pty.write('\r');
+          // Hardening: the only hazardous injection (Down+Enter) is now consumed —
+          // stop polling immediately so no keystroke can reach the live session,
+          // WITHOUT relying on the case-sensitive 'permissions' status-bar halt
+          // (that coupling is fragile to Claude Code TUI text changes).
+          clearInterval(promptPoll);
+        }, 350);
+        return;
+      }
+      if (showingTrust && !trustHandled) {
+        trustHandled = true;
+        this.pty.write('\r');     // trust screen default is "Yes, I trust"
+        return;
+      }
+    }, 1200);
+    // first-run observability fix: broaden window (20s -> 45s) so a late second screen
+    // still auto-accepts, and at the backstop surface a wedge instead of a false 'running'.
     setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
+      clearInterval(promptPoll);
+      if (this.pty && !this.outputBuffer.isBootstrapped()) {
+        const recent = this.outputBuffer.getRecent().replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+        if (this.detectFirstRunPrompt(recent) !== null) {
+          this._awaitingInteractiveConfirmation = true;
+          console.warn(`[agent-pty] ${this.env.agentName}: awaiting interactive confirmation — first-run prompt still showing at backstop, not bootstrapped`);
         }
       }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 8000);
+    }, 45000);
+  }
+
+  // first-run observability fix: co-occurring, prompt-specific tokens only — never a
+  // single word — so live agent output can't trigger a keystroke. Broadened (B) to
+  // catch case + folder/directory variants of the same two first-run screens.
+  private detectFirstRunPrompt(recent: string): 'bypass' | 'trust' | null {
+    if ((recent.includes('Bypass') || recent.includes('bypass')) && recent.includes('accept')) return 'bypass';
+    if (recent.includes('trust') && (recent.includes('folder') || recent.includes('directory'))) return 'trust';
+    return null;
   }
 
   /**
@@ -352,6 +418,12 @@ export class AgentPTY {
    */
   getOutputBuffer(): OutputBuffer {
     return this.outputBuffer;
+  }
+
+  // first-run observability fix: true only while genuinely wedged — AND-gated with
+  // !isBootstrapped so a late recovery auto-reports healthy without extra clearing.
+  isAwaitingInteractiveConfirmation(): boolean {
+    return this._awaitingInteractiveConfirmation && !this.outputBuffer.isBootstrapped();
   }
 
   /**
