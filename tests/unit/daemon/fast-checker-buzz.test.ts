@@ -12,6 +12,9 @@ function createMockAgent(name = 'test-agent') {
     name,
     isBootstrapped: vi.fn().mockReturnValue(true),
     injectMessage: vi.fn().mockReturnValue(true),
+    // This fork's FastChecker drains via injectMessageDetailed() (returns {ok,code})
+    // rather than the boolean injectMessage(); upstream's mock predates that refactor.
+    injectMessageDetailed: vi.fn().mockReturnValue({ ok: true }),
     write: vi.fn(),
   } as any;
 }
@@ -92,6 +95,7 @@ describe('FastChecker — Buzz (Nostr/NIP-29) additions', () => {
 
       const injectedCalls = [
         ...agent.injectMessage.mock.calls.map((c: unknown[]) => String(c[0])),
+        ...agent.injectMessageDetailed.mock.calls.map((c: unknown[]) => String(c[0])),
         ...agent.write.mock.calls.map((c: unknown[]) => String(c[0])),
       ];
       const sawBuzzMessage = injectedCalls.some((text) => text.includes('queued message'));

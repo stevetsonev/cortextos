@@ -2644,7 +2644,7 @@ busCommand
 
     for (const [name, acct] of Object.entries(store.accounts)) {
       const isActive = name === store.active;
-      const missing = REQUIRED.filter((f) => (acct as Record<string, unknown>)[f] === undefined);
+      const missing = REQUIRED.filter((f) => (acct as unknown as Record<string, unknown>)[f] === undefined);
       console.log(`${name}${isActive ? ' (active)' : ''}`);
       console.log(
         `  5h: ${utilOf(acct.five_hour_utilization, ALERT_5H)}`
@@ -2662,7 +2662,7 @@ busCommand
       }
     }
 
-    const activeAcct = store.accounts[store.active] as Record<string, unknown> | undefined;
+    const activeAcct = store.accounts[store.active] as unknown as Record<string, unknown> | undefined;
     if (activeAcct && (typeof activeAcct.five_hour_utilization !== 'number'
       || typeof activeAcct.seven_day_utilization !== 'number')) {
       console.log('');
