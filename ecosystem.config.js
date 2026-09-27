@@ -32,6 +32,10 @@ module.exports = {
         // then watch the operator chat for "🚨 CRITICAL: daemon crash-looping"
         // after 3 crashes in 15 min.
         CTX_DEBUG_ALLOW_CRASH_TRIGGER: '0',
+        // Cron expressions are matched with LOCAL getters (src/daemon/cron-scheduler.ts), so the
+        // daemon must run in UTC to keep the slots it had on Lightsail (Etc/UTC). The Mac Mini's
+        // zone is America/Edmonton.
+        TZ: 'UTC',
       },
       // max_restarts + restart_delay is the ultimate crash-storm circuit
       // breaker. If the daemon dies 10 times faster than 5s apart, PM2
